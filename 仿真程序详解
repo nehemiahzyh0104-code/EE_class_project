@@ -1,0 +1,83 @@
+这段代码是一个基于MuJoCo物理引擎的UR5e机械臂基础仿真程序。下面逐部分详细解释：
+1. 导入模块
+import time
+import mujoco.viewer
+import mujoco
+import numpy as np
+import os
+mujoco：核心物理引擎，用于机器人仿真
+mujoco.viewer：3D可视化工具
+numpy：数值计算
+os：文件路径操作
+time：时间控制
+2. 模型文件路径设置
+script_dir = os.path.dirname(os.path.abspath(__file__))
+xml_path = os.path.join(script_dir, "..", "..", "models", "universal_robots_ur5e", "scene.xml")
+获取当前脚本所在目录
+构建到UR5e机器人模型XML文件的相对路径
+3. 主程序入口
+if __name__ == "__main__":
+4. 加载模型和数据
+model = mujoco.MjModel.from_xml_path(xml_path)
+data = mujoco.MjData(model)
+model：包含机器人几何、动力学、约束等静态信息
+data：存储仿真过程中的动态状态（位置、速度、控制输入等）
+5. 重置到"home"关键帧
+key_frame_index = model.key("home").id
+mujoco.mj_resetDataKeyframe(model, data, key_frame_index)
+mujoco.mj_forward(model, data)
+找到名为"home"的预设姿态
+将机器人的关节位置、速度等重置到该姿态
+mj_forward：前向计算，更新所有依赖于状态的量
+6. 保存默认控制信号
+default_ctrl = data.ctrl.copy()
+从关键帧中读取初始控制指令（通常是关节目标位置）
+7. 打印模型信息
+print("info about the model:")
+print("nq:", model.nq)    # 位置自由度（关节数）
+print("nv:", model.nv)    # 速度自由度
+print("nu:", model.nu)    # 控制输入数量（执行器数）
+print("na:", model.na)    # 激活状态数
+print("timestep:", model.opt.timestep)  # 仿真步长（秒）
+输出模型基本参数，如UR5e有6个关节，所以nq=6, nu=6
+8. 主仿真循环
+with mujoco.viewer.launch_passive(model, data) as viewer:
+    while viewer.is_running():
+        step_start = time.time()
+
+        # 控制指令设置
+        data.ctrl[:] = default_ctrl
+        # 执行一步仿真
+        mujoco.mj_step(model, data)
+        
+        # 更新可视化
+        viewer.sync()
+
+        # 实时同步
+        time_until_next_step = model.opt.timestep - (time.time() - step_start)
+        if time_until_next_step > 0:
+            time.sleep(time_until_next_step)
+关键点说明：
+launch_passive：启动被动模式可视化器，可在单独的线程中运行
+mj_step：执行一步物理仿真，包括：
+积分动力学方程
+计算碰撞
+更新状态
+实时同步：确保仿真以实际时间运行
+默认timestep通常为0.002秒（500Hz）
+如果计算快于实时，则sleep等待
+如果计算慢于实时，则无法保持实时性
+9. 程序结束
+print("Simulation ended.")
+程序功能总结
+这是一个基础的UR5e机械臂静态仿真程序：
+加载UR5e模型
+重置到"home"姿态
+保持该姿态不动（控制信号不变）
+实时显示3D可视化
+程序本身不执行任何运动控制，仅维持初始状态
+可能的扩展方向
+运动控制：修改data.ctrl为轨迹跟踪或逆运动学解算
+交互：添加键盘/鼠标控制
+任务：实现抓取、书写等具体任务
+数据记录：记录关节状态用于后续分析
