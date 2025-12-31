@@ -1,0 +1,900 @@
+###
+# Planning practice with MuJoCo
+# SI100B Robotics Programming
+# This code is modified based on the MuJoCo template code at https://github.com/pab47/pab47.github.io/tree/master.
+# Date: Dec., 2025
+###
+
+import mujoco as mj
+from mujoco.glfw import glfw
+import numpy as np
+import os
+import scipy as sp
+
+xml_path = '../../models/universal_robots_ur5e/scene.xml' #xml file (assumes this is in the same folder as this file)
+simend = 1000 # 增加总仿真时间，以便完成多个曲线
+print_camera_config = 0 #set to 1 to print camera config
+                        #this is useful for initializing view of the model)
+
+# For callback functions
+button_left = False
+button_middle = False
+button_right = False
+lastx = 0
+lasty = 0
+
+# Helper function
+def IK_controller(model, data, X_ref, q_pos):
+    # Compute Jacobian
+    position_Q = data.site_xpos[0]
+
+    jacp = np.zeros((3, 6))
+    mj.mj_jac(model, data, jacp, None, position_Q, 7)
+
+    J = jacp.copy()
+    Jinv = np.linalg.pinv(J)
+
+    # Reference point
+    X = position_Q.copy()
+    dX = X_ref - X
+
+    # Compute control input
+    dq = Jinv @ dX
+
+    return q_pos + dq
+
+def init_controller(model,data):
+    #initialize the controller here. This function is called once, in the beginning
+    pass
+
+def controller(model, data):
+    #put the controller here. This function is called inside the simulation.
+    pass
+
+def keyboard(window, key, scancode, act, mods):
+    if act == glfw.PRESS and key == glfw.KEY_BACKSPACE:
+        mj.mj_resetData(model, data)
+        mj.mj_forward(model, data)
+
+def mouse_button(window, button, act, mods):
+    # update button state
+    global button_left
+    global button_middle
+    global button_right
+
+    button_left = (glfw.get_mouse_button(
+        window, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS)
+    button_middle = (glfw.get_mouse_button(
+        window, glfw.MOUSE_BUTTON_MIDDLE) == glfw.PRESS)
+    button_right = (glfw.get_mouse_button(
+        window, glfw.MOUSE_BUTTON_RIGHT) == glfw.PRESS)
+
+    # update mouse position
+    glfw.get_cursor_pos(window)
+
+def mouse_move(window, xpos, ypos):
+    # compute mouse displacement, save
+    global lastx
+    global lasty
+    global button_left
+    global button_middle
+    global button_right
+
+    dx = xpos - lastx
+    dy = ypos - lasty
+    lastx = xpos
+    lasty = ypos
+
+    # no buttons down: nothing to do
+    if (not button_left) and (not button_middle) and (not button_right):
+        return
+
+    # get current window size
+    width, height = glfw.get_window_size(window)
+
+    # get shift key state
+    PRESS_LEFT_SHIFT = glfw.get_key(
+        window, glfw.KEY_LEFT_SHIFT) == glfw.PRESS
+    PRESS_RIGHT_SHIFT = glfw.get_key(
+        window, glfw.KEY_RIGHT_SHIFT) == glfw.PRESS
+    mod_shift = (PRESS_LEFT_SHIFT or PRESS_RIGHT_SHIFT)
+
+    # determine action based on mouse button
+    if button_right:
+        if mod_shift:
+            action = mj.mjtMouse.mjMOUSE_MOVE_H
+        else:
+            action = mj.mjtMouse.mjMOUSE_MOVE_V
+    elif button_left:
+        if mod_shift:
+            action = mj.mjtMouse.mjMOUSE_ROTATE_H
+        else:
+            action = mj.mjtMouse.mjMOUSE_ROTATE_V
+    else:
+        action = mj.mjtMouse.mjMOUSE_ZOOM
+
+    mj.mjv_moveCamera(model, action, dx/height,
+                      dy/height, scene, cam)
+
+def scroll(window, xoffset, yoffset):
+    action = mj.mjtMouse.mjMOUSE_ZOOM
+    mj.mjv_moveCamera(model, action, 0.0, -0.05 *
+                      yoffset, scene, cam)
+
+# Get the full path
+dirname = os.path.dirname(__file__)
+abspath = os.path.join(dirname + "/" + xml_path)
+xml_path = abspath
+
+# MuJoCo data structures
+model = mj.MjModel.from_xml_path(xml_path)  # MuJoCo model
+data = mj.MjData(model)                # MuJoCo data
+cam = mj.MjvCamera()                        # Abstract camera
+opt = mj.MjvOption()                        # visualization options
+
+# Init GLFW, create window, make OpenGL context current, request v-sync
+glfw.init()
+window = glfw.create_window(1920, 1080, "Demo", None, None)
+glfw.make_context_current(window)
+glfw.swap_interval(1)
+
+# initialize visualization data structures
+mj.mjv_defaultCamera(cam)
+mj.mjv_defaultOption(opt)
+scene = mj.MjvScene(model, maxgeom=10000)
+context = mj.MjrContext(model, mj.mjtFontScale.mjFONTSCALE_150.value)
+
+# install GLFW mouse and keyboard callbacks
+glfw.set_key_callback(window, keyboard)
+glfw.set_cursor_pos_callback(window, mouse_move)
+glfw.set_mouse_button_callback(window, mouse_button)
+glfw.set_scroll_callback(window, scroll)
+
+# Example on how to set camera configuration
+cam.azimuth =  179.8300000000001 
+cam.elevation =  87.16333333333334
+cam.distance =  2.22
+cam.lookat = np.array([ 0.29723477517870245 , 0.28277006411151073 , 0.6082647377843177 ])
+
+# Initialize the controller
+init_controller(model,data)
+
+# Set the controller
+mj.set_mjcb_control(controller)
+
+# Initialize joint configuration
+init_qpos = np.array([-1.6353559, -1.28588984, 2.14838487, -2.61087434, -1.5903009, -0.06818645])
+data.qpos[:] = init_qpos
+cur_q_pos = init_qpos.copy()
+
+# Trajectory visualization
+traj_points = []
+MAX_TRAJ = 5000
+LINE_RGBA = np.array([1.0, 0.0, 0.0, 1.0])
+
+######################################
+### 定义多个轨迹段 ###
+# 每个轨迹段包含：起点、控制点、终点、插值类型、持续时间
+class TrajectorySegment:
+    def __init__(self, start_point, end_point, control_point=None, interp_type='linear', duration=3.0):
+        self.start_point = np.array(start_point)  # 起点
+        self.end_point = np.array(end_point)      # 终点
+        self.control_point = np.array(control_point) if control_point is not None else None  # 控制点（用于贝塞尔曲线）
+        self.interp_type = interp_type  # 插值类型：'linear' 或 'bezier'
+        self.duration = duration       # 该段持续时间
+        self.completed = False         # 标记是否完成
+
+# 定义多个轨迹段，形成连续书写路径
+# 这里定义书写一个三角形路径
+trajectory_segments = [
+    # ========== 初始阶段：从初始点移至李字第1笔书写起始点（z=0.1） ==========
+    TrajectorySegment(
+        start_point=[-0.55, 0.1, 0.3],
+        end_point=[-0.75, 0.3, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+
+    # ========== 李字书写（笔画顺序：横→竖→撇→捺→子横→子竖弯钩，起/止点均z=0.1） ==========
+    # 李-第1笔：横（书写，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[-0.75, 0.3, 0.1],
+        end_point=[-0.45, 0.3, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 提笔：从第1笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[-0.45, 0.3, 0.1],
+        end_point=[-0.45, 0.3, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至李字第2笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[-0.45, 0.3, 0.3],
+        end_point=[-0.6, 0.3, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至李字第2笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[-0.6, 0.3, 0.3],
+        end_point=[-0.6, 0.3, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 李-第2笔：竖（书写，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[-0.6, 0.3, 0.1],
+        end_point=[-0.6, 0.0, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 提笔：从第2笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[-0.6, 0.0, 0.1],
+        end_point=[-0.6, 0.0, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至李字第3笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[-0.6, 0.0, 0.3],
+        end_point=[-0.6, 0.2, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至李字第3笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[-0.6, 0.2, 0.3],
+        end_point=[-0.6, 0.2, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 李-第3笔：撇（书写，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[-0.6, 0.2, 0.1],
+        end_point=[-0.75, 0.1, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 提笔：从第3笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[-0.75, 0.1, 0.1],
+        end_point=[-0.75, 0.1, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至李字第4笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[-0.75, 0.1, 0.3],
+        end_point=[-0.6, 0.2, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至李字第4笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[-0.6, 0.2, 0.3],
+        end_point=[-0.6, 0.2, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 李-第4笔：捺（二次拟合，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[-0.6, 0.2, 0.1],
+        end_point=[-0.45, 0.1, 0.1],
+        control_point=[-0.55, 0.15, 0.2],
+        interp_type="bezier",
+        duration=2.0
+    ),
+    # 提笔：从第4笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[-0.45, 0.1, 0.1],
+        end_point=[-0.45, 0.1, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至李字第5笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[-0.45, 0.1, 0.3],
+        end_point=[-0.35, 0.1, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至李字第5笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[-0.35, 0.1, 0.3],
+        end_point=[-0.35, 0.1, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 李-第5笔：子横（书写，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[-0.35, 0.1, 0.1],
+        end_point=[-0.15, 0.1, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 提笔：从第5笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[-0.15, 0.1, 0.1],
+        end_point=[-0.15, 0.1, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至李字第6笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[-0.15, 0.1, 0.3],
+        end_point=[-0.25, 0.1, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至李字第6笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[-0.25, 0.1, 0.3],
+        end_point=[-0.25, 0.1, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 李-第6笔：子竖弯钩（二次拟合，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[-0.25, 0.1, 0.1],
+        end_point=[-0.1, 0.0, 0.1],
+        control_point=[-0.2, 0.05, 0.2],
+        interp_type="bezier",
+        duration=2.0
+    ),
+
+    # ========== 文字书写（衔接李字，笔画顺序：点→横→撇→捺，起/止点均z=0.1） ==========
+    # 提笔：从李字最后一笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[-0.1, 0.0, 0.1],
+        end_point=[-0.1, 0.0, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至文字第1笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[-0.1, 0.0, 0.3],
+        end_point=[-0.05, 0.38, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至文字第1笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[-0.05, 0.38, 0.3],
+        end_point=[-0.05, 0.38, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 文-第1笔：点（二次拟合，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[-0.05, 0.38, 0.1],
+        end_point=[-0.07, 0.36, 0.1],
+        control_point=[-0.06, 0.37, 0.2],
+        interp_type="bezier",
+        duration=2.0
+    ),
+    # 提笔：从文第1笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[-0.07, 0.36, 0.1],
+        end_point=[-0.07, 0.36, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至文字第2笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[-0.07, 0.36, 0.3],
+        end_point=[-0.15, 0.32, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至文字第2笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[-0.15, 0.32, 0.3],
+        end_point=[-0.15, 0.32, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 文-第2笔：横（书写，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[-0.15, 0.32, 0.1],
+        end_point=[0.05, 0.32, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 提笔：从文第2笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[0.05, 0.32, 0.1],
+        end_point=[0.05, 0.32, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至文字第3笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[0.05, 0.32, 0.3],
+        end_point=[-0.15, 0.32, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至文字第3笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[-0.15, 0.32, 0.3],
+        end_point=[-0.15, 0.32, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 文-第3笔：撇（书写，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[-0.15, 0.32, 0.1],
+        end_point=[-0.23, 0.22, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 提笔：从文第3笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[-0.23, 0.22, 0.1],
+        end_point=[-0.23, 0.22, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至文字第4笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[-0.23, 0.22, 0.3],
+        end_point=[0.05, 0.32, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至文字第4笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[0.05, 0.32, 0.3],
+        end_point=[0.05, 0.32, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 文-第4笔：捺（二次拟合，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[0.05, 0.32, 0.1],
+        end_point=[0.13, 0.22, 0.1],
+        control_point=[0.09, 0.27, 0.2],
+        interp_type="bezier",
+        duration=2.0
+    ),
+
+    # ========== 恒字书写（衔接文字，笔画顺序：忄点1→忄点2→忄竖→横→横折→横→竖钩，起/止点均z=0.1） ==========
+    # 提笔：从文字最后一笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[0.13, 0.22, 0.1],
+        end_point=[0.13, 0.22, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至恒字第1笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[0.13, 0.22, 0.3],
+        end_point=[0.2, 0.3, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至恒字第1笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[0.2, 0.3, 0.3],
+        end_point=[0.2, 0.3, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 恒-第1笔：忄点1（二次拟合，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[0.2, 0.3, 0.1],
+        end_point=[0.18, 0.28, 0.1],
+        control_point=[0.19, 0.29, 0.2],
+        interp_type="bezier",
+        duration=2.0
+    ),
+    # 提笔：从恒第1笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[0.18, 0.28, 0.1],
+        end_point=[0.18, 0.28, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至恒字第2笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[0.18, 0.28, 0.3],
+        end_point=[0.2, 0.2, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至恒字第2笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[0.2, 0.2, 0.3],
+        end_point=[0.2, 0.2, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 恒-第2笔：忄点2（二次拟合，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[0.2, 0.2, 0.1],
+        end_point=[0.18, 0.18, 0.1],
+        control_point=[0.19, 0.19, 0.2],
+        interp_type="bezier",
+        duration=2.0
+    ),
+    # 提笔：从恒第2笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[0.18, 0.18, 0.1],
+        end_point=[0.18, 0.18, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至恒字第3笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[0.18, 0.18, 0.3],
+        end_point=[0.2, 0.25, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至恒字第3笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[0.2, 0.25, 0.3],
+        end_point=[0.2, 0.25, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 恒-第3笔：忄竖（书写，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[0.2, 0.25, 0.1],
+        end_point=[0.2, 0.0, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 提笔：从恒第3笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[0.2, 0.0, 0.1],
+        end_point=[0.2, 0.0, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至恒字第4笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[0.2, 0.0, 0.3],
+        end_point=[0.25, 0.3, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至恒字第4笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[0.25, 0.3, 0.3],
+        end_point=[0.25, 0.3, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 恒-第4笔：横（书写，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[0.25, 0.3, 0.1],
+        end_point=[0.45, 0.3, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 提笔：从恒第4笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[0.45, 0.3, 0.1],
+        end_point=[0.45, 0.3, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至恒字第5笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[0.45, 0.3, 0.3],
+        end_point=[0.25, 0.3, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至恒字第5笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[0.25, 0.3, 0.3],
+        end_point=[0.25, 0.3, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 恒-第5笔：横折（书写，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[0.25, 0.3, 0.1],
+        end_point=[0.25, 0.2, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 提笔：从恒第5笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[0.25, 0.2, 0.1],
+        end_point=[0.25, 0.2, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至恒字第6笔起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[0.25, 0.2, 0.3],
+        end_point=[0.25, 0.25, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至恒字第6笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[0.25, 0.25, 0.3],
+        end_point=[0.25, 0.25, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 恒-第6笔：横（书写，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[0.25, 0.25, 0.1],
+        end_point=[0.45, 0.25, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 提笔：从恒第6笔终止点（z=0.1）升至z=0.3（同x/y）
+    TrajectorySegment(
+        start_point=[0.45, 0.25, 0.1],
+        end_point=[0.45, 0.25, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 平移：从z=0.3处移至恒字第7笔（竖钩）起始点的z=0.3对应位置
+    TrajectorySegment(
+        start_point=[0.45, 0.25, 0.3],
+        end_point=[0.35, 0.25, 0.3],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 落位：从z=0.3对应位置移至恒字第7笔书写起始点（z=0.1）
+    TrajectorySegment(
+        start_point=[0.35, 0.25, 0.3],
+        end_point=[0.35, 0.25, 0.1],
+        interp_type='linear',
+        duration=2.0
+    ),
+    # 恒-第7笔：竖钩（书写，起/止点z=0.1）
+    TrajectorySegment(
+        start_point=[0.35, 0.25, 0.1],
+        end_point=[0.35, 0.0, 0.1],
+        interp_type='linear',
+        duration=2.0
+    )
+]
+# 轨迹执行状态
+current_segment_index = 0
+segment_start_time = 0.0
+segment_elapsed_time = 0.0
+X_ref = np.array([0.4, 0.1, 0.1])  # 初始参考位置
+
+######################################
+### INTERPOLATION FUNCTIONS ###
+def LinearInterpolate(q0, q1, t, t_total):
+    """
+    线性插值函数
+    参数:
+        q0: 起始位置 (3维向量)
+        q1: 结束位置 (3维向量)
+        t: 当前时间
+        t_total: 总时间
+    返回:
+        在时间t时的插值位置
+    """
+    # 计算归一化时间参数u，确保在[0,1]范围内
+    u = t / t_total
+    u = np.clip(u, 0, 1)  # 限制u在[0,1]之间
+    
+    # 线性插值公式: q(t) = q0 + u * (q1 - q0)
+    return q0 + u * (q1 - q0)
+
+def QuadBezierInterpolate(q0, q1, q2, t, t_total):
+    """
+    二次贝塞尔插值函数
+    参数:
+        q0: 起始控制点 (3维向量)
+        q1: 中间控制点 (3维向量)
+        q2: 结束控制点 (3维向量)
+        t: 当前时间
+        t_total: 总时间
+    返回:
+        在时间t时的贝塞尔曲线位置
+    """
+    # 计算归一化时间参数u，确保在[0,1]范围内
+    u = t / t_total
+    u = np.clip(u, 0, 1)  # 限制u在[0,1]之间
+    
+    # 二次贝塞尔曲线公式: 
+    # B(u) = (1-u)^2 * q0 + 2*u*(1-u) * q1 + u^2 * q2
+    return (1 - u)**2 * q0 + 2 * u * (1 - u) * q1 + u**2 * q2
+
+def get_reference_position(current_time):
+    """
+    获取当前时间的参考位置
+    参数:
+        current_time: 当前仿真时间
+    返回:
+        当前参考位置
+    """
+    global current_segment_index, segment_start_time, X_ref, trajectory_segments
+    
+    # 如果所有轨迹段都已完成，保持最后一个位置
+    if current_segment_index >= len(trajectory_segments):
+        return trajectory_segments[-1].end_point
+    
+    # 获取当前轨迹段
+    current_segment = trajectory_segments[current_segment_index]
+    
+    # 计算当前轨迹段的已用时间
+    segment_elapsed_time = current_time - segment_start_time
+    
+    # 如果当前段已完成，切换到下一段
+    if segment_elapsed_time >= current_segment.duration:
+        # 标记当前段完成
+        current_segment.completed = True
+        
+        # 更新参考位置为当前段的终点
+        X_ref = current_segment.end_point
+        
+        # 切换到下一段
+        current_segment_index += 1
+        
+        if current_segment_index < len(trajectory_segments):
+            # 开始新的一段
+            segment_start_time = current_time
+            current_segment = trajectory_segments[current_segment_index]
+            segment_elapsed_time = 0.0
+        else:
+            # 所有段都已完成
+            return X_ref
+    
+    # 计算当前段的参考位置
+    if current_segment.interp_type == 'linear':
+        # 线性插值
+        X_ref = LinearInterpolate(
+            current_segment.start_point,
+            current_segment.end_point,
+            segment_elapsed_time,
+            current_segment.duration
+        )
+    elif current_segment.interp_type == 'bezier' and current_segment.control_point is not None:
+        # 贝塞尔插值
+        X_ref = QuadBezierInterpolate(
+            current_segment.start_point,
+            current_segment.control_point,
+            current_segment.end_point,
+            segment_elapsed_time,
+            current_segment.duration
+        )
+    
+    return X_ref
+############################################
+
+while not glfw.window_should_close(window):
+    time_prev = data.time
+
+    while (data.time - time_prev < 1.0/60.0):
+        # Store trajectory
+        mj_end_eff_pos = data.site_xpos[0]
+        if (mj_end_eff_pos[2] < 0.1):
+            traj_points.append(mj_end_eff_pos.copy())
+        if len(traj_points) > MAX_TRAJ:
+            traj_points.pop(0)
+            
+        # Get current joint configuration
+        cur_q_pos = data.qpos.copy()
+        
+        # 获取当前参考位置（连续执行多个轨迹段）
+        X_ref = get_reference_position(data.time)
+
+        # Compute control input using IK
+        cur_ctrl = IK_controller(model, data, X_ref, cur_q_pos)
+        
+        # Apply control input
+        data.ctrl[:] = cur_ctrl
+        mj.mj_step(model, data)
+        data.time += 0.02
+
+    if (data.time >= simend):
+        break
+
+    # get framebuffer viewport
+    viewport_width, viewport_height = glfw.get_framebuffer_size(window)
+    viewport = mj.MjrRect(0, 0, viewport_width, viewport_height)
+
+    # print camera configuration (help to initialize the view)
+    if (print_camera_config==1):
+        print('cam.azimuth = ', cam.azimuth, '\n', 'cam.elevation = ', cam.elevation, '\n', 'cam.distance = ', cam.distance)
+        print('cam.lookat = np.array([', cam.lookat[0], ',', cam.lookat[1], ',', cam.lookat[2], '])')
+
+    # Update scene and render
+    mj.mjv_updateScene(model, data, opt, None, cam,
+                       mj.mjtCatBit.mjCAT_ALL.value, scene)
+    
+    # Add trajectory as spheres
+    for j in range(1, len(traj_points)):
+        if scene.ngeom >= scene.maxgeom:
+            break  # avoid overflow
+
+        geom = scene.geoms[scene.ngeom]
+        scene.ngeom += 1
+        
+        p1 = traj_points[j-1]
+        p2 = traj_points[j]
+        direction = p2 - p1
+        midpoint = (p1 + p2) / 2.0
+        
+        # Configure this geom as a line
+        geom.type = mj.mjtGeom.mjGEOM_SPHERE  # Use sphere for endpoints
+        geom.rgba[:] = LINE_RGBA
+        geom.size[:] = np.array([0.002, 0.002, 0.002])
+        geom.pos[:] = midpoint
+        geom.mat[:] = np.eye(3)  # no rotation
+        geom.dataid = -1
+        geom.segid = -1
+        geom.objtype = 0
+        geom.objid = 0
+        
+    # 添加轨迹段可视化（可选，显示规划的路径）
+    for i, segment in enumerate(trajectory_segments):
+        if scene.ngeom >= scene.maxgeom:
+            break
+            
+        geom = scene.geoms[scene.ngeom]
+        scene.ngeom += 1
+        
+        # 显示起点
+        geom.type = mj.mjtGeom.mjGEOM_SPHERE
+        geom.rgba[:] = np.array([0.0, 1.0, 0.0, 1.0])  # 绿色
+        geom.size[:] = np.array([0.005, 0.005, 0.005])
+        geom.pos[:] = segment.start_point
+        geom.mat[:] = np.eye(3)
+        geom.dataid = -1
+        geom.segid = -1
+        geom.objtype = 0
+        geom.objid = 0
+        
+        if scene.ngeom >= scene.maxgeom:
+            break
+            
+        geom = scene.geoms[scene.ngeom]
+        scene.ngeom += 1
+        
+        # 显示终点
+        geom.type = mj.mjtGeom.mjGEOM_SPHERE
+        geom.rgba[:] = np.array([0.0, 0.0, 1.0, 1.0])  # 蓝色
+        geom.size[:] = np.array([0.005, 0.005, 0.005])
+        geom.pos[:] = segment.end_point
+        geom.mat[:] = np.eye(3)
+        geom.dataid = -1
+        geom.segid = -1
+        geom.objtype = 0
+        geom.objid = 0
+        
+        if segment.interp_type == 'bezier' and segment.control_point is not None:
+            if scene.ngeom >= scene.maxgeom:
+                break
+                
+            geom = scene.geoms[scene.ngeom]
+            scene.ngeom += 1
+            
+            # 显示控制点
+            geom.type = mj.mjtGeom.mjGEOM_SPHERE
+            geom.rgba[:] = np.array([1.0, 1.0, 0.0, 1.0])  # 黄色
+            geom.size[:] = np.array([0.004, 0.004, 0.004])
+            geom.pos[:] = segment.control_point
+            geom.mat[:] = np.eye(3)
+            geom.dataid = -1
+            geom.segid = -1
+            geom.objtype = 0
+            geom.objid = 0
+    
+    mj.mjr_render(viewport, scene, context)
+
+    # swap OpenGL buffers (blocking call due to v-sync)
+    glfw.swap_buffers(window)
+
+    # process pending GUI events, call GLFW callbacks
+    glfw.poll_events()
+
+glfw.terminate()
